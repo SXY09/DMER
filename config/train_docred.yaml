@@ -4,8 +4,8 @@ import: base_config.yml
 datamodule:
   _target_: DocRED.DocREDataModule
   _partial_: true
-  dataset_dir: F:\second work\CDR_json格式
-  train_file: convert_train - 345.json
+  dataset_dir: ./datasets/CDR
+  train_file: convert_train.json
   dev_file: convert_dev.json
   test_file: convert_test.json
   train_batch_size: 4
