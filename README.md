@@ -1,5 +1,5 @@
 # DMER
-This is the relevant code for our paper 《Enhancing Document-Level Biomedical Relation Extraction through Dynamic Context Interaction and Agent-Driven Memory Reflection》.
+This is the relevant code for our paper: Enhancing Document-Level Biomedical Relation Extraction through Dynamic Context Interaction and Agent-Driven Memory Reflection.
 # Requirements
 Environment Setup
 Please make sure you have Python 3.9+ installed. Install the required dependencies using:
