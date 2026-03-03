@@ -5,3 +5,5 @@ Environment Setup
 Please make sure you have Python 3.9+ installed. Install the required dependencies using:
 ```bash
 pip install -r requirements.txt
+
+# Data Augmentation 
