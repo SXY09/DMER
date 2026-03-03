@@ -11,7 +11,8 @@ pip install -r requirements.txt
 ```bash
 python Generative-based Data Augmentation.py
 ```
-2. Training the DMER Model: To train the model on the benchmark datasets, configure your paths in the config folder and run:
+
+2.Training the DMER Model: To train the model on the benchmark datasets, configure your paths in the config folder and run:
 ```bash
 python train.py
 ```
