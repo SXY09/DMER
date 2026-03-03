@@ -1,0 +1,107 @@
+# @package _global_
+import: base_config.yml
+
+datamodule:
+  _target_: DocRED.DocREDataModule
+  _partial_: true
+  dataset_dir: F:\second work\CDR_json格式
+  train_file: convert_train - 345.json
+  dev_file: convert_dev.json
+  test_file: convert_test.json
+  train_batch_size: 4
+  test_batch_size: 4
+
+model:
+  _target_: model.DocREModel
+  _partial_: true
+  model_name_or_path: ./biobert_base
+  max_seq_length: 1024
+  transformer_type: bert
+  graph_conv:
+    _target_: model.GATGraphConv
+    _partial_: true
+    edge_types: ['d-s', 's-s', 's-m', 'ie/m-m', 'is/m-m']
+    feat_drop: 0.25
+    attn_drop: 0.1
+    residual: false
+    activation:
+      _target_: torch.nn.Tanh
+    num_layers: 2
+  residual: true
+  num_class: 2
+  block_size: 64
+  reason_type: "criss-cross"
+  ttm_re: true
+  loss_fnt:
+    _target_: losses.AFLoss
+    gamma_pos: 1.0
+    gamma_neg: 1.0
+    num_labels: -1
+
+react_memory:
+  enable: true
+  model:
+    name: react_memory
+    max_iterations: 5
+    max_retry: 5
+    use_summary: true
+    num_pre_history: 2
+    debug: true
+
+  tools:
+    Finish:
+      open: true
+    GetTaskDescription:
+      open: true
+    GetRelationDefinition:
+      open: true
+
+  memory:
+    CorrectMemory:
+      open: true
+      mode: biobert
+      k: 3
+      num_samples_init: 100
+    ReflexionMemory:
+      open: true
+      mode: biobert
+      k: 3
+  train:
+    if_train: true
+    if_predict: false
+    if_evaluate: true
+
+  data:
+    type: re
+    name: CDR
+    num_samples: 100
+    fn_schema: "F:/second work/CDR_json格式/cdr_relations.json"
+
+  llm:
+    model_name: gpt-4-turbo-preview
+    temperature: 0
+    max_tokens: 4096
+    use_cache: false
+    api_key: "1"
+
+
+train:
+  seed: 66
+  epochs: 30
+  log_steps: 100                         # 
+  device: "cuda:0"
+  start_steps: -1
+  evaluation_steps: -1                   # 
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-5
+  classifier_lr: 1e-4
+  lr_schedule: linear
+  warmup_ratio: 0.06
+  adam_epsilon: 1e-6
+  max_grad_norm: 1.0
+  save_best_path: ./model/CDR
+  save_last_path: null
+  save_memory: ./save
+
+load_path: null
+load_checkpoint: null
