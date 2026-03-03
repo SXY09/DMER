@@ -638,7 +638,7 @@ def apply_confidence_filter(original_pred, corrected_pred, threshold=0.8):
             final_pred[i][corrected_pred[i]] = 1.0
     return final_pred
 
-@hydra.main(config_path="config", config_name="train_docred.yaml", version_base="1.3")
+@hydra.main(config_path="config", config_name="train.yaml", version_base="1.3")
 def main(cfg):
     print_config_tree(cfg)
 
