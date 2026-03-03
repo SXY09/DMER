@@ -86,7 +86,7 @@ react_memory:
 
 
 train:
-  seed: 66
+  seed: 88
   epochs: 30
   log_steps: 100                         # 
   device: "cuda:0"
