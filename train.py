@@ -181,8 +181,6 @@ def train(cfg,data_handler,datamodule, model, react_memory):
         set_seed(args.seed)
     model.to(args.device)
 
-    MEMORY_MAX_SIZE = 500
-
     train_dataset, train_dataloader = datamodule.train_dataset, datamodule.train_dataloader()
     dev_dataset, dev_dataloader = datamodule.dev_dataset, datamodule.dev_dataloader()
     test_dataset, test_dataloader = datamodule.test_dataset, datamodule.test_dataloader()
@@ -287,8 +285,6 @@ def train(cfg,data_handler,datamodule, model, react_memory):
                         "title": batch["titles"][sample_idx],
                     }
                     current_count = react_memory.data_handler1.correct_memory.num_memory_items
-                    if current_count >= MEMORY_MAX_SIZE:
-                        continue
 
                     if f1 >= 1.0:
                         react_memory.record_correct_memory(correct_sample1)
