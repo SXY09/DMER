@@ -9,10 +9,18 @@ import faiss
 
 
 class BaseIndex:
-    texts = []
-    index = None
+    """ 
+    functions
+        add(texts) -> None: 
+        query_indexs(query, top_k=5) -> list[int]: 
+        get_texts(idxs) -> list[str]: 
+        query(query, top_k=5) -> list[str]: query_indexs + get_texts
+    properties
+        num_indexed_items:
+    """
     def __init__(self) -> None:
-        pass
+        self.texts = []
+        self.index = None
 
     def add(self, texts):
         self.texts.extend(texts)
@@ -37,17 +45,29 @@ class DummyIndex(BaseIndex):
         return list(range(top_k))
 
 class SimCSEIndex(BaseIndex):
+    """ SimCSE+Faiss 
+    model for encode: SimCSE("princeton-nlp/sup-simcse-roberta-large"); 
+    model for index: faiss.IndexFlatIP
+    """
     def __init__(self, init_texts=None) -> None:
+        super().__init__()
         from simcse import SimCSE
         self.encoder = SimCSE("princeton-nlp/sup-simcse-roberta-large")
+        self.index = faiss.IndexFlatL2(self.encoder.get_embedding_dim())
         if init_texts is not None:
             self.add(init_texts)
-        self.index = faiss.IndexFlatL2(self.encoder.get_embedding_dim())
 
     def add(self, texts):
-        super().add(texts)
+        texts = list(texts)
+        if not texts:
+            return
+        if self.index.ntotal != len(self.texts):
+            raise ValueError('Memory texts and vectors are already misaligned')
         embeddings = self.encoder.encode(texts, batch_size=128, normalize_to_unit=True, return_numpy=True)
+        if embeddings.shape != (len(texts), self.index.d):
+            raise ValueError('Expected one embedding per memory text')
         self.index.add(embeddings)
+        super().add(texts)
 
     def query_indexs(self, query, top_k=5):
         query_embedding = self.encoder.encode([query], batch_size=128, normalize_to_unit=True, return_numpy=True)
@@ -55,22 +75,34 @@ class SimCSEIndex(BaseIndex):
         return I[0]
 
 class BGEIndex(BaseIndex):
+    """ biobert-base-cased-v1.1  https://huggingface.co/BAAI/bge-large-zh-v1.5
+    model for encode: biobert-base-cased-v1.1;
+    model for index: faiss.IndexFlatIP
+    """
     def __init__(self, init_texts=None) -> None:
+        super().__init__()
         from transformers import AutoModel, AutoTokenizer
         model_id = "./biobert_base"
         self.tokenizer = AutoTokenizer.from_pretrained(model_id,local_files_only=True)
         self.model = AutoModel.from_pretrained(model_id, local_files_only=True)
         self.model.eval()
-        self.model.to(device)
+        self.model.to(device)  # to cuda
 
         self.index = faiss.IndexFlatIP(self.model.config.hidden_size)
+        if init_texts is not None:
+            self.add(init_texts)
 
     def add(self, texts):
-        super().add(texts)
-
+        texts = list(texts)
+        if not texts:
+            return
+        if self.index.ntotal != len(self.texts):
+            raise ValueError('Memory texts and vectors are already misaligned')
         embeddings = self.get_embedding_batch(texts, batch_size=128)
-
-        self.index.add(embeddings.numpy())
+        if tuple(embeddings.shape) != (len(texts), self.index.d):
+            raise ValueError('Expected one embedding per memory text')
+        self.index.add(embeddings.numpy())  # -> numpy
+        super().add(texts)
 
     def query_indexs(self, query, top_k=5):
         inputs = self.tokenizer([query], padding=True, truncation=True, return_tensors='pt', max_length=512)
@@ -83,8 +115,8 @@ class BGEIndex(BaseIndex):
     def get_embedding_batch(self, texts, batch_size=128):
         inputs_batch = self.tokenizer(texts, padding=True, truncation=True, return_tensors='pt', max_length=512)
         embeddings = []
-
-        for i in range(0, len(inputs_batch), batch_size):
+        # for i in tqdm(range(0, len(texts), batch_size)):
+        for i in range(0, len(texts), batch_size):
             inputs = {k: v[i:i+batch_size] for k, v in inputs_batch.items()}
             inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
