@@ -181,6 +181,8 @@ def train(cfg,data_handler,datamodule, model, react_memory):
         set_seed(args.seed)
     model.to(args.device)
 
+    MEMORY_MAX_SIZE = 500
+
     train_dataset, train_dataloader = datamodule.train_dataset, datamodule.train_dataloader()
     dev_dataset, dev_dataloader = datamodule.dev_dataset, datamodule.dev_dataloader()
     test_dataset, test_dataloader = datamodule.test_dataset, datamodule.test_dataloader()
@@ -253,20 +255,21 @@ def train(cfg,data_handler,datamodule, model, react_memory):
                     step + 1) % args.gradient_accumulation_steps == 0 and is_react_epoch:
 
                 with torch.no_grad():
-                    inputs["labels"] = None
-                    pred_labels = model(**inputs)
-                    pred_labels = pred_labels.cpu().numpy()
+                    # Use probabilities for memory construction; the SPO parser
+                    # applies argmax when a discrete relation label is required.
+                    prediction_inputs = dict(inputs, labels=None, return_prob=True)
+                    pred_probs = model(**prediction_inputs).cpu().numpy()
 
                 sample_pred_len = [len(spos) for spos in batch["spo_lists"]]  # 每个样本的 spo 数量
-                pred_labels_split = []
+                pred_probs_split = []
                 start = 0
                 for len_ in sample_pred_len:
-                    pred_labels_split.append(pred_labels[start:start + len_])
+                    pred_probs_split.append(pred_probs[start:start + len_])
                     start += len_
 
                 for sample_idx in range(len(batch["spo_lists"])):
                     docre_spo, sample_golden = parse_docre_pred_to_spo_simple(
-                        pred_labels=pred_labels_split[sample_idx],  # 单个样本的预测结果
+                        pred_labels=pred_probs_split[sample_idx],  # 单个样本的预测结果
                         batch=batch,
                         sample_idx=sample_idx
                     )
@@ -285,6 +288,8 @@ def train(cfg,data_handler,datamodule, model, react_memory):
                         "title": batch["titles"][sample_idx],
                     }
                     current_count = react_memory.data_handler1.correct_memory.num_memory_items
+                    if current_count >= MEMORY_MAX_SIZE:
+                        continue
 
                     if f1 >= 1.0:
                         react_memory.record_correct_memory(correct_sample1)
@@ -382,7 +387,7 @@ def evaluate(cfg, model, dataset, dataloader,react_memory, epoch,tag="dev"):
     is_react_epoch = False
     if epoch is not None:
 
-        is_react_epoch = (epoch >= 40) and (epoch % 2 == 0)
+        is_react_epoch = (epoch >= 10) and (epoch % 2 == 0)
 
         if tag == "dev":
             is_react_epoch = False
@@ -407,8 +412,12 @@ def evaluate(cfg, model, dataset, dataloader,react_memory, epoch,tag="dev"):
         }
 
         with torch.no_grad():
-            pred = model(**inputs)
-            pred = pred.cpu().numpy()
+            pred_probs = model(**inputs, return_prob=True).cpu().numpy()
+            if not np.isfinite(pred_probs).all():
+                raise ValueError("Model returned non-finite prediction probabilities.")
+            pred = np.eye(pred_probs.shape[1], dtype=np.float32)[
+                np.argmax(pred_probs, axis=1)
+            ]
 
             if cfg.react_memory.enable and react_memory is not None and is_react_epoch:
                 batch_pred = []
@@ -424,6 +433,13 @@ def evaluate(cfg, model, dataset, dataloader,react_memory, epoch,tag="dev"):
                     start = split_indices[sample_idx]
                     end = split_indices[sample_idx + 1]
                     sample_pred_labels = pred[start:end]
+                    sample_pred_probs = pred_probs[start:end]
+                    sample_confidence = np.max(sample_pred_probs, axis=1)
+
+                    # Exactly 0.8 is accepted without reflection.
+                    if not np.any(sample_confidence < 0.8):
+                        batch_pred.append(sample_pred_labels.copy())
+                        continue
 
                     assert len(sample_pred_labels) == sample_spo_counts[sample_idx], \
                         f"样本{sample_idx}：预测长度{len(sample_pred_labels)} != spo数量{sample_spo_counts[sample_idx]}"
@@ -431,11 +447,22 @@ def evaluate(cfg, model, dataset, dataloader,react_memory, epoch,tag="dev"):
                     docre_spo, sample_golden = parse_docre_pred_to_spo_simple(
                         sample_pred_labels, batch, sample_idx
                     )
+                    target_entity_pairs = [
+                        (spo["subject"], spo["object"]) for spo in docre_spo
+                    ]
+                    reflection_prompt = generate_reflection_prompt(
+                        text=sample_golden["text"],
+                        original_pred=sample_pred_labels,
+                        original_confidence=sample_confidence,
+                        entity_pairs=target_entity_pairs,
+                        threshold=0.8,
+                    )
                     try:
                         react_result = react_memory.extract(
                             text=sample_golden["text"],
                             idx=sample_golden["doc_title"],
                             pred_spo=docre_spo,
+                            reflection_prompt=reflection_prompt,
                             is_test=True
                         )
                         corrected_spo = react_result["spo_list_pred"] if react_result[
@@ -444,7 +471,9 @@ def evaluate(cfg, model, dataset, dataloader,react_memory, epoch,tag="dev"):
                         print(f"ReAct error (sample {sample_idx}): {str(e)[:50]}")
                         corrected_spo = docre_spo
 
-                    corrected_pred = spo_to_docre_pred(corrected_spo, docre_spo, sample_pred_labels, batch, sample_idx)
+                    corrected_pred = spo_to_docre_pred(
+                        corrected_spo, docre_spo, sample_pred_probs, batch, sample_idx
+                    )
                     batch_pred.append(corrected_pred)
 
                 pred[np.isnan(pred)] = 0
@@ -571,56 +600,33 @@ def get_memory_save_dir(cfg):
 
 
 def generate_reflection_prompt(text, original_pred, original_confidence, entity_pairs, threshold=0.8):
-
-    processed_pred = []
-    for pred in original_pred:
-
-        if isinstance(pred, (list, np.ndarray)) and len(pred) == 2:
-            processed_pred.append(np.argmax(pred))
-
-        elif isinstance(pred, (int, float)) and (pred == 0 or pred == 1):
-            processed_pred.append(int(pred))
-
-        else:
-            print(f"警告：无效的预测格式 {pred}，默认按 0 处理")
-            processed_pred.append(0)
-    original_pred = processed_pred
-
+    """Describe uncertain pairs without changing the agent's output protocol."""
     low_confidence_pairs = []
-    for i, (h, t) in enumerate(entity_pairs):
+    protected_pairs = []
+    for i, (head, tail) in enumerate(entity_pairs):
+        record = {
+            "subject": head,
+            "object": tail,
+            "predicted_relation_id": int(np.argmax(original_pred[i])),
+            "confidence": float(original_confidence[i]),
+        }
         if original_confidence[i] < threshold:
-            #
-            pred_relation = "chemical induced disease" if original_pred[
-                                                              i] == 1 else "no chemical disease induction relation"
-            low_confidence_pairs.append(
-                f"Entity Pair {i + 1}: {h} and {t}, Model Prediction: {pred_relation}, Confidence Score: {original_confidence[i]:.2f}"
-            )
-
-    if not low_confidence_pairs:
-        return "All predictions have a confidence score ≥ 0.8; no modification is needed."
-
-    evidence_rules = """
-    ### Mandatory Evidence Rules:
-    1. To predict "chemical induced disease" (Class 1), the text MUST contain explicit causal keywords:
-       - Causal terms: "induce", "cause", "lead to", "result in", "trigger", "provoke"
-    2. To predict "no chemical disease induction relation" (Class 0), the text MUST contain explicit non-causal keywords:
-       - Non-causal terms: "prevent", "treat", "cure", "associate with", "correlate with", "unrelated to"
-    3. If NONE of the above keywords exist in the text → DO NOT modify the original prediction; keep it unchanged.
-    """
-
-    prompt = f"""
-    Task: Classify the relation between each entity pair in the text as either "chemical induced disease" (Class 1) or "no chemical disease induction relation" (Class 0).
-    Original Text: {text}
-    Entity Pairs to Check (only low-confidence predictions):
-    {chr(10).join(low_confidence_pairs)}
-    {evidence_rules}
-    ### Output Format:
-    Only return the indices of entity pairs that need modification and their new labels, in the format: [(index1, new_label), (index2, new_label)]. 
-    - "index" refers to the number of the entity pair (e.g., use 1 for "Entity Pair 1").
-    - "new_label" must be 0 (for "no relation") or 1 (for "induced relation").
-    Do NOT include any explanations. If no modification is needed, return an empty list: [].
-    """
-    return prompt.strip()
+            low_confidence_pairs.append(record)
+        else:
+            protected_pairs.append(record)
+    return (
+        "Verify only the low-confidence entity pairs below using the current "
+        "document and retrieved memory examples. Retain a relation unless "
+        "document evidence supports its correction. Keep all entity names "
+        "unchanged, do not add entity pairs, and preserve predictions for "
+        "the protected pairs. Use the task's relation names and return the "
+        "complete spo_list through the existing Finish action.\n"
+        f"Confidence threshold: {threshold} (strictly below triggers review).\n"
+        "Low-confidence pairs: "
+        + json.dumps(low_confidence_pairs, ensure_ascii=False)
+        + "\nProtected pairs: "
+        + json.dumps(protected_pairs, ensure_ascii=False)
+    )
 
 
 def apply_confidence_filter(original_pred, corrected_pred, threshold=0.8):
@@ -634,7 +640,7 @@ def apply_confidence_filter(original_pred, corrected_pred, threshold=0.8):
             final_pred[i][corrected_pred[i]] = 1.0
     return final_pred
 
-@hydra.main(config_path="config", config_name="train.yaml", version_base="1.3")
+@hydra.main(config_path="config", config_name="train_docred.yaml", version_base="1.3")
 def main(cfg):
     print_config_tree(cfg)
 
