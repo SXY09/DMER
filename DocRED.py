@@ -45,8 +45,8 @@ class DocRED(Dataset):
         ori_path = str(dataset_dir / file_name)
         with open(ori_path, "r",encoding='utf-8') as fh:
             self.data: List[Dict] = json.load(fh)
-        split = ori_path[ori_path.rfind("/") + 1:ori_path.rfind(".")]
-        save_path = save_dir / (split + f".{model_name_or_path}.pt")
+        split = Path(ori_path).stem
+        save_path = save_dir / (split + f".{model_name_or_path}.pairids_v1.pt")
         self.rel_code2name = self._get_rel_code_to_name()
         if os.path.exists(save_path):
             print(f"Loading CDR {split} features ...")
@@ -124,6 +124,8 @@ class DocRED(Dataset):
                 rel_name = self.rel_code2name.get(rel_code, rel_code)
 
                 spo = {
+                    "h_idx": h_idx,
+                    "t_idx": t_idx,
                     "subject": ent_index_to_name[h_idx],
                     "predicate": rel_name,
                     "object": ent_index_to_name[t_idx]
@@ -265,6 +267,10 @@ class DocRED(Dataset):
                                                                 1)
 
             i_line += 1
+            # Match textual records to the same pair order used by model labels.
+            # The existing loader keeps the last annotation for duplicate pairs.
+            pair_records = {(s["h_idx"], s["t_idx"]): s for s in spo_list}
+            spo_list = [pair_records[(h, t)] for h, t in hts]
             feature = {
                 'title': title,
                 'input_ids': input_ids,
