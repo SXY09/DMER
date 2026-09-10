@@ -496,31 +496,31 @@ def static():
     print("filter path: ",filterpath)
 
 def findMention(sents, ent_name, ent_type):
+    """Match mentions using zero-based document-token spans [start, end).
+
+    sent_id remains the sentence index. The offset counts the original
+    tokens in preceding sentences, before subword tokenization.
+    """
     mentions = []
-    sent_id = 0
     if not isinstance(ent_name, list) or len(ent_name) == 0:
         print(f"⚠️ 空实体名称或非词列表（类型：{ent_type}），跳过匹配")
         return mentions
     ent_len = len(ent_name)
-    ent_tokens_lower = [token.lower() for token in ent_name]  # 词列表转小写用于匹配
-    for sent in sents:
+    ent_tokens_lower = [token.lower() for token in ent_name]
+    token_offset = 0
+    for sent_id, sent in enumerate(sents):
         sent_tokens_lower = [token.lower() for token in sent]
-        sent_len = len(sent_tokens_lower)
-        if ent_len > sent_len:
-            sent_id += 1
-            continue
-        for i in range(sent_len - ent_len + 1):
-            if sent_tokens_lower[i:i+ent_len] == ent_tokens_lower:
-                original_ent_name = sent[i:i+ent_len]
-                start_pos = i
-                end_pos = i + ent_len
+        # A short or empty sentence has no matches, but still contributes
+        # its token count to the offsets of subsequent sentences.
+        for i in range(len(sent) - ent_len + 1):
+            if sent_tokens_lower[i:i + ent_len] == ent_tokens_lower:
                 mentions.append({
-                    'name': original_ent_name,
+                    'name': sent[i:i + ent_len],
                     'sent_id': sent_id,
                     'type': ent_type,
-                    'pos': [start_pos, end_pos]
+                    'pos': [token_offset + i, token_offset + i + ent_len]
                 })
-        sent_id += 1
+        token_offset += len(sent)
     return mentions
 
 def findSentence(sents,name):#
@@ -930,7 +930,7 @@ def main():
     high_quality_data = evaluate_data_quality(original_data_path, synthetic_data_path)
     print(f"Final high-quality data retained: {len(high_quality_data)} samples")
     print("\n=== Starting random sampling of 50 high-quality samples ===")
-    high_quality_path = "F:\GenRDK-main\synthetic_data_m5_s5\CDR_high_quality_synthetic_data.json"
+    high_quality_path = savedor + 'CDR_high_quality_synthetic_data.json'  # 使用本次生成的全文坐标数据
     with open(high_quality_path, 'r', encoding='utf-8') as f:
         high_quality_data = json.load(f)
     sample_count = 500
